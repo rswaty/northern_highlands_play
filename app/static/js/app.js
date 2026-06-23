@@ -275,9 +275,19 @@
     state.map.on("pm:create", (event) => {
       const layer = event.layer;
       layer.feature = { type: "Feature", properties: {}, geometry: layer.toGeoJSON().geometry };
+      state.drawnLayer.addLayer(layer);
       bindLayer(layer);
       selectLayer(layer);
       setStatus("Polygon created. Add a name, type, and notes, then click Update area.");
+    });
+
+    state.map.on("pm:remove", (event) => {
+      if (state.drawnLayer.hasLayer(event.layer)) {
+        state.drawnLayer.removeLayer(event.layer);
+      }
+      if (state.selectedLayer === event.layer) {
+        clearSelection();
+      }
     });
 
     state.map.on("click", () => clearSelection());
