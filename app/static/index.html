@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Northern Highlands — Treatment Prioritization</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Northern Highlands Treatment Prioritization</h1>
+      <p class="subtitle">Draw areas on the map, add notes, and save your input for fuel treatment and planned burn planning.</p>
+    </div>
+    <div class="header-actions">
+      <label>
+        Your name
+        <input id="participant" type="text" placeholder="e.g. Forest Service, Tribal liaison" />
+      </label>
+      <button id="saveBtn" class="primary">Save polygons</button>
+      <button id="loadBtn">Load saved</button>
+      <button id="exportBtn">Download GeoJSON</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section id="map"></section>
+
+    <aside class="sidebar">
+      <div class="panel">
+        <h2>Layers</h2>
+        <label class="checkbox">
+          <input id="toggleBasemap" type="checkbox" checked />
+          Roads &amp; labels (OpenStreetMap)
+        </label>
+        <label class="checkbox">
+          <input id="toggleWfer" type="checkbox" checked />
+          WFER raster overlay
+        </label>
+        <p class="hint">Higher WFER values appear more red; lower values more green.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Draw polygons</h2>
+        <p class="hint">Use the toolbar on the map to draw a polygon. Click a shape to edit its details.</p>
+        <div id="status" class="status">Loading map…</div>
+      </div>
+
+      <div class="panel" id="featurePanel" hidden>
+        <h2>Selected area</h2>
+        <form id="featureForm">
+          <label>
+            Area name
+            <input id="featureName" type="text" placeholder="e.g. North ridge unit" />
+          </label>
+          <label>
+            Priority type
+            <select id="featureType">
+              <option value="">Select…</option>
+            </select>
+          </label>
+          <label>
+            Notes
+            <textarea id="featureNotes" rows="5" placeholder="Why prioritize here? Concerns, opportunities, timing…"></textarea>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="primary">Update area</button>
+            <button type="button" id="deleteFeatureBtn" class="danger">Delete area</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Saved submissions</h2>
+        <ul id="submissionList" class="submission-list"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
