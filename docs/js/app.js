@@ -58,6 +58,48 @@
     return window.supabase.createClient(url, key);
   }
 
+  function featureCount(item) {
+    const features = item?.features;
+    if (Array.isArray(features)) return features.length;
+    if (typeof features === "string") {
+      try {
+        const parsed = JSON.parse(features);
+        return Array.isArray(parsed) ? parsed.length : 0;
+      } catch {
+        return 0;
+      }
+    }
+    return 0;
+  }
+
+  function clearSession() {
+    state.submissionId = null;
+    localStorage.removeItem("nh_submission_id");
+    els.participant.value = "";
+  }
+
+  function getDrawnLayers() {
+    const layers = [];
+    const seen = new Set();
+
+    const addLayer = (layer) => {
+      if (!layer || seen.has(layer) || typeof layer.toGeoJSON !== "function") return;
+      const geometry = layer.toGeoJSON()?.geometry;
+      if (!geometry) return;
+      if (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon") return;
+      seen.add(layer);
+      layers.push(layer);
+    };
+
+    if (state.map?.pm?.getGeomanLayers) {
+      state.map.pm.getGeomanLayers().forEach(addLayer);
+    }
+    if (state.drawnLayer) {
+      state.drawnLayer.eachLayer(addLayer);
+    }
+    return layers;
+  }
+
   function defaultStyle() {
     return {
       color: "#0f766e",
@@ -139,11 +181,7 @@
   }
 
   function featuresFromMap() {
-    const features = [];
-    state.drawnLayer.eachLayer((layer) => {
-      features.push(layerToFeature(layer));
-    });
-    return features;
+    return getDrawnLayers().map(layerToFeature);
   }
 
   function loadFeatures(features) {
@@ -180,6 +218,16 @@
     };
   }
 
+  async function cleanupEmptySubmissions(rows) {
+    const emptyRows = rows.filter((item) => featureCount(item) === 0);
+    for (const item of emptyRows) {
+      await state.supabase.from("submissions").delete().eq("id", item.id);
+      if (state.submissionId === item.id) {
+        clearSession();
+      }
+    }
+  }
+
   async function refreshSubmissions() {
     els.submissionList.innerHTML = "";
 
@@ -198,15 +246,18 @@
       return;
     }
 
-    if (!data.length) {
+    await cleanupEmptySubmissions(data || []);
+    const saved = (data || []).filter((item) => featureCount(item) > 0);
+
+    if (!saved.length) {
       els.submissionList.innerHTML = "<li class='hint'>No saved submissions yet.</li>";
       return;
     }
 
-    data.forEach((item) => {
+    saved.forEach((item) => {
       const li = document.createElement("li");
       const label = document.createElement("span");
-      const count = Array.isArray(item.features) ? item.features.length : 0;
+      const count = featureCount(item);
       label.textContent = `${item.participant} (${count} areas)`;
       const btn = document.createElement("button");
       btn.textContent = "Open";
@@ -230,6 +281,13 @@
 
     if (error || !data) {
       setStatus("Could not load that submission.", true);
+      return;
+    }
+
+    if (featureCount(data) === 0) {
+      clearSession();
+      setStatus("That submission had no saved areas and was removed.", true);
+      await refreshSubmissions();
       return;
     }
 
@@ -329,6 +387,7 @@
     state.map.fitBounds(imageBounds);
 
     state.drawnLayer = L.featureGroup().addTo(state.map);
+    state.map.pm.setGlobalOptions({ layerGroup: state.drawnLayer });
 
     state.map.pm.addControls({
       position: "topleft",
@@ -406,6 +465,26 @@
 
   state.supabase = initSupabase();
 
+  async function restoreSession() {
+    if (!state.submissionId || !state.supabase) {
+      clearSession();
+      return;
+    }
+
+    const { data, error } = await state.supabase
+      .from("submissions")
+      .select("*")
+      .eq("id", state.submissionId)
+      .maybeSingle();
+
+    if (error || !data || featureCount(data) === 0) {
+      clearSession();
+      return;
+    }
+
+    await openSubmission(state.submissionId);
+  }
+
   fetchConfig()
     .then(async (config) => {
       initMap(config);
@@ -415,9 +494,7 @@
         setStatus("Map ready. Draw polygons on the map to mark priority areas.");
       }
       await refreshSubmissions();
-      if (state.submissionId && state.supabase) {
-        await openSubmission(state.submissionId);
-      }
+      await restoreSession();
     })
     .catch((error) => setStatus(error.message, true));
 })();

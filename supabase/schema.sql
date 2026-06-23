@@ -30,3 +30,8 @@ drop policy if exists "Allow public update" on public.submissions;
 create policy "Allow public update"
   on public.submissions for update
   using (true);
+
+drop policy if exists "Allow public delete" on public.submissions;
+create policy "Allow public delete"
+  on public.submissions for delete
+  using (true);
