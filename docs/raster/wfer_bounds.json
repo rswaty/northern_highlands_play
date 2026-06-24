@@ -3,5 +3,8 @@
   "west": -90.33773520210507,
   "north": 46.34532792824917,
   "east": -88.9568048249598,
-  "crs": "EPSG:4326"
+  "crs": "EPSG:4326",
+  "minZoom": 8,
+  "maxZoom": 14,
+  "tileUrl": "raster/tiles/{z}/{x}/{y}.png"
 }

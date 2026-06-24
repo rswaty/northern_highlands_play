@@ -434,7 +434,12 @@
       throw new Error("Raster overlay not found. Run: python scripts/prepare_raster.py");
     }
     const bounds = await res.json();
-    return { bounds, overlayUrl: "raster/wfer_overlay.png" };
+    return {
+      bounds,
+      tileUrl: bounds.tileUrl || "raster/tiles/{z}/{x}/{y}.png",
+      minZoom: bounds.minZoom ?? 8,
+      maxZoom: bounds.maxZoom ?? 14,
+    };
   }
 
   async function cleanupEmptySubmissions(rows) {
@@ -691,7 +696,7 @@
   }
 
   function initMap(config) {
-    const { bounds, overlayUrl } = config;
+    const { bounds, tileUrl, minZoom, maxZoom } = config;
 
     state.map = L.map("map", { zoomControl: true });
     setBasemap(state.basemapKey);
@@ -700,7 +705,14 @@
     const northEast = L.latLng(bounds.north, bounds.east);
     const imageBounds = L.latLngBounds(southWest, northEast);
 
-    state.wferLayer = L.imageOverlay(overlayUrl, imageBounds, { opacity: 0.75 }).addTo(state.map);
+    state.wferLayer = L.tileLayer(tileUrl, {
+      minZoom,
+      maxZoom,
+      maxNativeZoom: maxZoom,
+      bounds: imageBounds,
+      opacity: 0.85,
+      tms: false,
+    }).addTo(state.map);
     state.map.fitBounds(imageBounds);
 
     state.drawnLayer = L.featureGroup().addTo(state.map);

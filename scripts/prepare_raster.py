@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Prepare wfer.tif for web display: warp to Web Mercator and colorize."""
+"""Prepare wfer.tif for web display: warp to Web Mercator, colorize, and tile."""
 
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -15,8 +17,12 @@ from rasterio.transform import array_bounds
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_TIF = ROOT / "inputs" / "wfer.tif"
 OUTPUT_DIR = ROOT / "docs" / "raster"
-OUTPUT_PNG = OUTPUT_DIR / "wfer_overlay.png"
-OUTPUT_BOUNDS = OUTPUT_DIR / "wfer_bounds.json"
+OUTPUT_GEOTIFF = OUTPUT_DIR / "wfer_overlay.tif"
+TILES_DIR = OUTPUT_DIR / "tiles"
+OUTPUT_META = OUTPUT_DIR / "wfer_bounds.json"
+
+MIN_ZOOM = 8
+MAX_ZOOM = 14
 
 # Typical WFER nodata from ArcGIS export
 NODATA = 2147483647
@@ -79,6 +85,47 @@ def colorize_wfer(values: np.ndarray, nodata_mask: np.ndarray) -> np.ndarray:
     return rgba
 
 
+def write_geotiff(rgba: np.ndarray, transform, crs: str, width: int, height: int) -> None:
+    with rasterio.open(
+        OUTPUT_GEOTIFF,
+        "w",
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=4,
+        dtype=np.uint8,
+        crs=crs,
+        transform=transform,
+        compress="lzw",
+        photometric="RGB",
+    ) as dst:
+        for band in range(4):
+            dst.write(rgba[:, :, band], band + 1)
+
+
+def build_tiles() -> None:
+    if TILES_DIR.exists():
+        shutil.rmtree(TILES_DIR)
+
+    TILES_DIR.mkdir(parents=True, exist_ok=True)
+
+    zoom_arg = f"{MIN_ZOOM}-{MAX_ZOOM}"
+    subprocess.run(
+        [
+            "gdal2tiles.py",
+            "--xyz",
+            "-z",
+            zoom_arg,
+            "--webviewer=none",
+            "--processes=4",
+            "--tilesize=256",
+            str(OUTPUT_GEOTIFF),
+            str(TILES_DIR),
+        ],
+        check=True,
+    )
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,30 +149,28 @@ def main() -> None:
         rgba = colorize_wfer(data[0], nodata_mask)
 
         west, south, east, north = array_bounds(height, width, transform)
-        # Leaflet imageOverlay expects WGS84 lat/lng degrees, not Web Mercator meters.
         west, south, east, north = transform_bounds(
             dst_crs, "EPSG:4326", west, south, east, north
         )
-        bounds = {
-            "south": south,
-            "west": west,
-            "north": north,
-            "east": east,
-            "crs": "EPSG:4326",
-        }
 
-    try:
-        from PIL import Image
+    write_geotiff(rgba, transform, dst_crs, width, height)
+    print(f"Wrote {OUTPUT_GEOTIFF}")
 
-        Image.fromarray(rgba, mode="RGBA").save(OUTPUT_PNG, optimize=True)
-    except ImportError:
-        import matplotlib.pyplot as plt
+    build_tiles()
+    print(f"Wrote tiles under {TILES_DIR}")
 
-        plt.imsave(OUTPUT_PNG, rgba)
-
-    OUTPUT_BOUNDS.write_text(json.dumps(bounds, indent=2))
-    print(f"Wrote {OUTPUT_PNG}")
-    print(f"Wrote {OUTPUT_BOUNDS}")
+    meta = {
+        "south": south,
+        "west": west,
+        "north": north,
+        "east": east,
+        "crs": "EPSG:4326",
+        "minZoom": MIN_ZOOM,
+        "maxZoom": MAX_ZOOM,
+        "tileUrl": "raster/tiles/{z}/{x}/{y}.png",
+    }
+    OUTPUT_META.write_text(json.dumps(meta, indent=2))
+    print(f"Wrote {OUTPUT_META}")
 
 
 if __name__ == "__main__":
