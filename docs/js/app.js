@@ -469,6 +469,17 @@
     return band[row * width + col];
   }
 
+  function normalizeGeoraster(gr) {
+    const xmin = gr.xmin ?? gr.mins?.[0];
+    const ymax = gr.ymax ?? gr.maxs?.[1];
+    const pixelWidth = gr.pixelWidth;
+    const pixelHeight = gr.pixelHeight;
+    if (![xmin, ymax, pixelWidth, pixelHeight, gr.width, gr.height].every(Number.isFinite)) {
+      throw new Error("GeoTIFF metadata is incomplete");
+    }
+    return { ...gr, xmin, ymax, pixelWidth, pixelHeight };
+  }
+
   function rasterProjection(gr) {
     const projection = gr.projection;
     if (typeof projection === "number") {
@@ -493,6 +504,10 @@
       const rowValues = [];
       for (let col = 0; col < tileSize; col += 1) {
         const latlng = map.unproject(tileOrigin.add([col, row]), coords.z);
+        if (!Number.isFinite(latlng.lat) || !Number.isFinite(latlng.lng)) {
+          rowValues.push(null);
+          continue;
+        }
         const [mx, my] = proj4("EPSG:4326", proj, [latlng.lng, latlng.lat]);
         const sourceCol = Math.floor((mx - gr.xmin) / pixelWidth);
         const sourceRow = Math.floor((gr.ymax - my) / pixelHeight);
@@ -562,44 +577,33 @@
         return canvas;
       }
 
-      const nwPoint = coords.scaleBy(tileSize);
-      const sePoint = nwPoint.add([tileSize, tileSize]);
-      const nw = this._map.unproject(nwPoint, coords.z);
-      const se = this._map.unproject(sePoint, coords.z);
-      const gr = this._georaster;
-      const tileRequest =
-        typeof gr.getValues === "function"
-          ? gr.getValues({
-              left: Math.min(nw.lng, se.lng),
-              right: Math.max(nw.lng, se.lng),
-              top: Math.max(nw.lat, se.lat),
-              bottom: Math.min(nw.lat, se.lat),
-              width: tileSize,
-              height: tileSize,
-              resampleMethod: "nearest",
-            })
-          : Promise.resolve(sampleTileValues(gr, this._map, coords, tileSize));
-
-      Promise.resolve(tileRequest)
-        .then((values) => {
-          const ctx = canvas.getContext("2d");
-          ctx.setTransform(scale, 0, 0, scale, 0, 0);
-          ctx.imageSmoothingEnabled = false;
-          paintTileValues(ctx, values, tileSize, this._colorFn);
-          done(null, canvas);
-        })
-        .catch((error) => {
-          console.error("WFER tile render failed:", error);
-          done(error, canvas);
-        });
+      try {
+        const ctx = canvas.getContext("2d");
+        ctx.setTransform(scale, 0, 0, scale, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        const values = sampleTileValues(this._georaster, this._map, coords, tileSize);
+        paintTileValues(ctx, values, tileSize, this._colorFn);
+        done(null, canvas);
+      } catch (error) {
+        console.error("WFER tile render failed:", error);
+        done(error, canvas);
+      }
 
       return canvas;
     },
   });
 
   function createWferLayer(georaster, config) {
-    const { noData, vmin, vmax } = config;
-    return new WferCrispLayer(georaster, (value) => wferValueToRgba(value, vmin, vmax, noData));
+    const { bounds, noData, vmin, vmax } = config;
+    const layerBounds = L.latLngBounds(
+      [bounds.south, bounds.west],
+      [bounds.north, bounds.east]
+    );
+    return new WferCrispLayer(
+      georaster,
+      (value) => wferValueToRgba(value, vmin, vmax, noData),
+      { bounds: layerBounds }
+    );
   }
 
   async function loadWferLayer(config) {
@@ -607,9 +611,14 @@
     setStatus("Loading WFER raster (one-time download, ~17 MB)…");
 
     const absoluteRasterUrl = new URL(rasterUrl, window.location.href).href;
-    const georaster = await parseGeoraster(absoluteRasterUrl);
-    if (!georaster.getValues && !georaster.values?.[0]) {
-      throw new Error("GeoTIFF parsed but cannot read pixel values");
+    const response = await fetch(absoluteRasterUrl);
+    if (!response.ok) {
+      throw new Error("Could not load WFER GeoTIFF");
+    }
+
+    const georaster = normalizeGeoraster(await parseGeoraster(await response.arrayBuffer()));
+    if (!georaster.values?.[0]) {
+      throw new Error("GeoTIFF parsed but pixel values are unavailable");
     }
     state.wferLayer = createWferLayer(georaster, config);
 
@@ -873,6 +882,9 @@
 
   function initMap(config) {
     const { bounds } = config;
+    if (![bounds.south, bounds.west, bounds.north, bounds.east].every(Number.isFinite)) {
+      throw new Error("Invalid raster bounds in wfer_bounds.json");
+    }
 
     state.map = L.map("map", { zoomControl: true });
     setBasemap(state.basemapKey);
