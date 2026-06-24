@@ -194,13 +194,11 @@ button.danger {
   border: 1px solid var(--border);
   background: linear-gradient(
     to right,
-    #000004 0%,
-    #2c115a 18%,
-    #721f81 36%,
-    #b5367a 54%,
-    #e55c4e 72%,
-    #fbb574 86%,
-    #fcfdbf 100%
+    #00204d 0%,
+    #414766 20%,
+    #747a6d 45%,
+    #b0af6f 70%,
+    #ffe945 100%
   );
 }
 

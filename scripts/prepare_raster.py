@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.enums import Resampling
+from rasterio.enums import ColorInterp, Resampling
 from rasterio.warp import calculate_default_transform, reproject, transform_bounds
 from rasterio.transform import array_bounds
 
@@ -25,49 +25,48 @@ MIN_ZOOM = 8
 MAX_ZOOM = 14
 
 # Typical WFER nodata from ArcGIS export
-NODATA = 2147483647
+SRC_NODATA = 2147483647
+DST_NODATA = -9999.0
 
 
-def magma_lut() -> np.ndarray:
-    """256x3 RGB LUT — matplotlib magma (dark = low, bright = high)."""
+def cividis_lut() -> np.ndarray:
+    """256x3 RGB LUT — Cividis (dark blue-gray low, yellow high)."""
     try:
         from matplotlib import colormaps
 
-        cmap = colormaps["magma"]
-        return (cmap(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
+        return (colormaps["cividis"](np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
     except (ImportError, AttributeError, KeyError):
         try:
             from matplotlib import cm
 
-            return (cm.get_cmap("magma")(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
+            return (cm.get_cmap("cividis")(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
         except (ImportError, AttributeError):
             pass
-        stops = np.array(
-            [
-                [0, 0, 4],
-                [28, 16, 68],
-                [79, 18, 123],
-                [129, 37, 129],
-                [181, 54, 122],
-                [229, 80, 100],
-                [251, 135, 97],
-                [254, 194, 135],
-                [252, 253, 191],
-            ],
-            dtype=np.float64,
-        )
-        positions = np.linspace(0, 1, len(stops))
-        targets = np.linspace(0, 1, 256)
-        lut = np.zeros((256, 3), dtype=np.uint8)
-        for i, t in enumerate(targets):
-            idx = int(np.clip(np.searchsorted(positions, t, side="right") - 1, 0, len(stops) - 2))
-            frac = (t - positions[idx]) / (positions[idx + 1] - positions[idx])
-            lut[i] = np.round(stops[idx] * (1 - frac) + stops[idx + 1] * frac).astype(np.uint8)
-        return lut
+    stops = np.array(
+        [
+            [0, 32, 77],
+            [65, 68, 102],
+            [88, 94, 109],
+            [116, 121, 109],
+            [145, 147, 109],
+            [174, 173, 109],
+            [207, 201, 110],
+            [253, 231, 37],
+        ],
+        dtype=np.float64,
+    )
+    positions = np.linspace(0, 1, len(stops))
+    targets = np.linspace(0, 1, 256)
+    lut = np.zeros((256, 3), dtype=np.uint8)
+    for i, t in enumerate(targets):
+        idx = int(np.clip(np.searchsorted(positions, t, side="right") - 1, 0, len(stops) - 2))
+        frac = (t - positions[idx]) / (positions[idx + 1] - positions[idx])
+        lut[i] = np.round(stops[idx] * (1 - frac) + stops[idx + 1] * frac).astype(np.uint8)
+    return lut
 
 
 def colorize_wfer(values: np.ndarray, nodata_mask: np.ndarray) -> np.ndarray:
-    """Map WFER values to RGBA using a magma-like, colorblind-friendly ramp."""
+    """Map WFER values to RGBA with Cividis. Nodata stays fully transparent (0,0,0,0)."""
     rgba = np.zeros((*values.shape, 4), dtype=np.uint8)
     valid = ~nodata_mask
     if not np.any(valid):
@@ -78,10 +77,13 @@ def colorize_wfer(values: np.ndarray, nodata_mask: np.ndarray) -> np.ndarray:
     span = max(vmax - vmin, 1.0)
     t = np.clip((values - vmin) / span, 0.0, 1.0)
 
-    lut = magma_lut()
+    lut = cividis_lut()
     indices = (t * 255).astype(np.uint8)
-    rgba[..., :3] = lut[indices]
-    rgba[..., 3] = np.where(valid, 215, 0)
+    rgb = lut[indices]
+    rgba[..., 0] = np.where(valid, rgb[..., 0], 0)
+    rgba[..., 1] = np.where(valid, rgb[..., 1], 0)
+    rgba[..., 2] = np.where(valid, rgb[..., 2], 0)
+    rgba[..., 3] = np.where(valid, 190, 0)
     return rgba
 
 
@@ -97,8 +99,13 @@ def write_geotiff(rgba: np.ndarray, transform, crs: str, width: int, height: int
         crs=crs,
         transform=transform,
         compress="lzw",
-        photometric="RGB",
     ) as dst:
+        dst.colorinterp = (
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.alpha,
+        )
         for band in range(4):
             dst.write(rgba[:, :, band], band + 1)
 
@@ -119,6 +126,7 @@ def build_tiles() -> None:
             "--webviewer=none",
             "--processes=4",
             "--tilesize=256",
+            "-x",
             str(OUTPUT_GEOTIFF),
             str(TILES_DIR),
         ],
@@ -140,12 +148,14 @@ def main() -> None:
             destination=data[0],
             src_transform=src.transform,
             src_crs=src.crs,
+            src_nodata=SRC_NODATA,
             dst_transform=transform,
             dst_crs=dst_crs,
+            dst_nodata=DST_NODATA,
             resampling=Resampling.bilinear,
         )
 
-        nodata_mask = (data[0] >= NODATA - 1) | (data[0] < 0) | ~np.isfinite(data[0])
+        nodata_mask = (data[0] <= DST_NODATA + 1) | ~np.isfinite(data[0])
         rgba = colorize_wfer(data[0], nodata_mask)
 
         west, south, east, north = array_bounds(height, width, transform)
