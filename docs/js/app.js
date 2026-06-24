@@ -450,7 +450,7 @@
     };
   }
 
-  function wferValueToColor(value, vmin, vmax, noData) {
+  function wferValueToRgba(value, vmin, vmax, noData) {
     if (value == null || !Number.isFinite(value) || value >= noData - 1 || value < 0) {
       return null;
     }
@@ -458,12 +458,243 @@
     const t = Math.max(0, Math.min(1, (value - vmin) / span));
     const idx = Math.round(t * 255);
     const rgb = cividisLut[idx];
-    return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.85)`;
+    return [rgb[0], rgb[1], rgb[2], 217];
+  }
+
+  function readRasterValue(band, row, col, width) {
+    if (!band) return null;
+    if (Array.isArray(band[0])) {
+      return band[row]?.[col];
+    }
+    return band[row * width + col];
+  }
+
+  function normalizeGeoraster(gr) {
+    return {
+      ...gr,
+      xmin: gr.xmin ?? gr.mins?.[0],
+      xmax: gr.xmax ?? gr.maxs?.[0],
+      ymin: gr.ymin ?? gr.mins?.[1],
+      ymax: gr.ymax ?? gr.maxs?.[1],
+      pixelWidth: gr.pixelWidth,
+      pixelHeight: gr.pixelHeight,
+    };
+  }
+
+  function rgbaToCss([r, g, b, a]) {
+    return `rgba(${r},${g},${b},${(a / 255).toFixed(3)})`;
+  }
+
+  function cellProjectedBounds(gr, row, col) {
+    const x0 = gr.xmin + col * gr.pixelWidth;
+    const x1 = x0 + gr.pixelWidth;
+    const ph = gr.pixelHeight;
+    const y0 = ph < 0 ? gr.ymax + row * ph : gr.ymax - row * Math.abs(ph);
+    const y1 = ph < 0 ? gr.ymax + (row + 1) * ph : gr.ymax - (row + 1) * Math.abs(ph);
+    return { x0, x1, yTop: Math.max(y0, y1), yBottom: Math.min(y0, y1) };
+  }
+
+  const WferCrispLayer = L.GridLayer.extend({
+    options: {
+      opacity: 0.85,
+      updateWhenZooming: false,
+      updateWhenIdle: true,
+      keepBuffer: 1,
+      maxNativeZoom: 18,
+    },
+
+    initialize(georaster, colorFn, options) {
+      L.setOptions(this, options);
+      this._georaster = normalizeGeoraster(georaster);
+      this._colorFn = colorFn;
+      const projection = this._georaster.projection;
+      this._proj =
+        typeof projection === "number"
+          ? `EPSG:${projection}`
+          : projection || georaster.sourceProjection || "EPSG:5070";
+    },
+
+    _projectedToLatLng(x, y) {
+      const [lng, lat] = proj4(this._proj, "EPSG:4326", [x, y]);
+      return L.latLng(lat, lng);
+    },
+
+    _latLngToTilePixel(latlng, coords, tileSize) {
+      const projected = this._map.project(latlng, coords.z);
+      const origin = coords.multiplyBy(tileSize);
+      return projected.subtract(origin);
+    },
+
+    _tileRowColRange(coords, tileSize, gr) {
+      const tileOrigin = coords.scaleBy(tileSize);
+      const corners = [
+        this._map.unproject(tileOrigin, coords.z),
+        this._map.unproject(tileOrigin.add([tileSize, 0]), coords.z),
+        this._map.unproject(tileOrigin.add([0, tileSize]), coords.z),
+        this._map.unproject(tileOrigin.add([tileSize, tileSize]), coords.z),
+      ];
+
+      let xMin = Infinity;
+      let xMax = -Infinity;
+      let yMin = Infinity;
+      let yMax = -Infinity;
+      for (const ll of corners) {
+        const [x, y] = proj4("EPSG:4326", this._proj, [ll.lng, ll.lat]);
+        xMin = Math.min(xMin, x);
+        xMax = Math.max(xMax, x);
+        yMin = Math.min(yMin, y);
+        yMax = Math.max(yMax, y);
+      }
+
+      const pw = gr.pixelWidth;
+      const ph = Math.abs(gr.pixelHeight);
+      const colMin = Math.max(0, Math.floor((xMin - gr.xmin) / pw));
+      const colMax = Math.min(gr.width - 1, Math.floor((xMax - gr.xmin) / pw));
+      const rowMin = Math.max(0, Math.floor((gr.ymax - yMax) / ph));
+      const rowMax = Math.min(gr.height - 1, Math.floor((gr.ymax - yMin) / ph));
+      const cellCount = Math.max(0, colMax - colMin + 1) * Math.max(0, rowMax - rowMin + 1);
+      return { colMin, colMax, rowMin, rowMax, cellCount };
+    },
+
+    _drawCell(ctx, gr, band, row, col, coords, tileSize, tileOrigin) {
+      const rgba = this._colorFn(readRasterValue(band, row, col, gr.width));
+      if (!rgba) return;
+
+      const { x0, x1, yTop, yBottom } = cellProjectedBounds(gr, row, col);
+      const corners = [
+        this._projectedToLatLng(x0, yTop),
+        this._projectedToLatLng(x1, yTop),
+        this._projectedToLatLng(x1, yBottom),
+        this._projectedToLatLng(x0, yBottom),
+      ];
+      const pts = corners.map((ll) => this._latLngToTilePixel(ll, coords, tileSize));
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      const minX = Math.floor(Math.min(...xs));
+      const maxX = Math.ceil(Math.max(...xs));
+      const minY = Math.floor(Math.min(...ys));
+      const maxY = Math.ceil(Math.max(...ys));
+      if (maxX <= 0 || maxY <= 0 || minX >= tileSize || minY >= tileSize) return;
+
+      const drawX = Math.max(0, minX);
+      const drawY = Math.max(0, minY);
+      const drawW = Math.min(tileSize, maxX) - drawX;
+      const drawH = Math.min(tileSize, maxY) - drawY;
+      if (drawW <= 0 || drawH <= 0) return;
+
+      ctx.fillStyle = rgbaToCss(rgba);
+      ctx.fillRect(drawX, drawY, drawW, drawH);
+    },
+
+    _drawPixelSample(ctx, gr, band, coords, tileSize, tileOrigin) {
+      const pixelWidth = gr.pixelWidth;
+      const pixelHeight = Math.abs(gr.pixelHeight);
+      const imageData = ctx.createImageData(tileSize, tileSize);
+      const pixels = imageData.data;
+
+      for (let py = 0; py < tileSize; py += 1) {
+        for (let px = 0; px < tileSize; px += 1) {
+          const latlng = this._map.unproject(tileOrigin.add([px, py]), coords.z);
+          let mx;
+          let my;
+          try {
+            [mx, my] = proj4("EPSG:4326", this._proj, [latlng.lng, latlng.lat]);
+          } catch (error) {
+            continue;
+          }
+
+          const col = Math.floor((mx - gr.xmin) / pixelWidth);
+          const row = Math.floor((gr.ymax - my) / pixelHeight);
+          if (col < 0 || row < 0 || col >= gr.width || row >= gr.height) {
+            continue;
+          }
+
+          const rgba = this._colorFn(readRasterValue(band, row, col, gr.width));
+          if (!rgba) continue;
+
+          const offset = (py * tileSize + px) * 4;
+          pixels[offset] = rgba[0];
+          pixels[offset + 1] = rgba[1];
+          pixels[offset + 2] = rgba[2];
+          pixels[offset + 3] = rgba[3];
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    },
+
+    _estimateCellScreenSize(gr, coords, tileSize) {
+      const row = Math.floor(gr.height / 2);
+      const col = Math.floor(gr.width / 2);
+      const { x0, x1, yTop, yBottom } = cellProjectedBounds(gr, row, col);
+      const nw = this._latLngToTilePixel(this._projectedToLatLng(x0, yTop), coords, tileSize);
+      const se = this._latLngToTilePixel(this._projectedToLatLng(x1, yBottom), coords, tileSize);
+      return Math.max(Math.abs(se.x - nw.x), Math.abs(se.y - nw.y));
+    },
+
+    createTile(coords, done) {
+      const tileSize = this.getTileSize().x;
+      const scale = L.Browser.retina ? 2 : 1;
+      const canvas = L.DomUtil.create("canvas", "leaflet-tile wfer-crisp-tile");
+      canvas.width = tileSize * scale;
+      canvas.height = tileSize * scale;
+      canvas.style.width = `${tileSize}px`;
+      canvas.style.height = `${tileSize}px`;
+
+      const draw = () => {
+        if (!this._map) {
+          done(null, canvas);
+          return;
+        }
+
+        const ctx = canvas.getContext("2d");
+        ctx.setTransform(scale, 0, 0, scale, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.clearRect(0, 0, tileSize, tileSize);
+
+        const gr = this._georaster;
+        const band = gr.values?.[0];
+        if (!band) {
+          done(new Error("WFER values unavailable"), canvas);
+          return;
+        }
+
+        const tileOrigin = coords.scaleBy(tileSize);
+        const { colMin, colMax, rowMin, rowMax, cellCount } = this._tileRowColRange(coords, tileSize, gr);
+        const cellScreenSize = this._estimateCellScreenSize(gr, coords, tileSize);
+        const useCells = cellScreenSize >= 1.5 && cellCount > 0 && cellCount <= 50000;
+
+        if (useCells) {
+          for (let row = rowMin; row <= rowMax; row += 1) {
+            for (let col = colMin; col <= colMax; col += 1) {
+              this._drawCell(ctx, gr, band, row, col, coords, tileSize, tileOrigin);
+            }
+          }
+        } else if (cellCount > 0) {
+          this._drawPixelSample(ctx, gr, band, coords, tileSize, tileOrigin);
+        }
+
+        done(null, canvas);
+      };
+
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(draw);
+      } else {
+        setTimeout(draw, 0);
+      }
+
+      return canvas;
+    },
+  });
+
+  function createWferLayer(georaster, config) {
+    const { noData, vmin, vmax } = config;
+    return new WferCrispLayer(georaster, (value) => wferValueToRgba(value, vmin, vmax, noData));
   }
 
   async function loadWferLayer(config) {
-    const { rasterUrl, noData, vmin, vmax } = config;
-    setStatus("Loading WFER raster (one-time download)…");
+    const { rasterUrl } = config;
+    setStatus("Loading WFER raster (one-time download, ~17 MB)…");
 
     const response = await fetch(rasterUrl);
     if (!response.ok) {
@@ -471,15 +702,10 @@
     }
 
     const georaster = await parseGeoraster(await response.arrayBuffer());
-    state.wferLayer = new GeoRasterLayer({
-      georaster,
-      opacity: 0.85,
-      resampleMethod: "nearest",
-      resolution: 512,
-      pixelValuesToColorFn(values) {
-        return wferValueToColor(values[0], vmin, vmax, noData);
-      },
-    });
+    if (!georaster.values?.[0]) {
+      throw new Error("GeoTIFF parsed but pixel values are unavailable");
+    }
+    state.wferLayer = createWferLayer(georaster, config);
 
     if (els.toggleWfer.checked) {
       state.wferLayer.addTo(state.map);

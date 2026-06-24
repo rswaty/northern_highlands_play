@@ -331,8 +331,9 @@ button.danger {
   }
 }
 
-/* GeoRaster canvas tiles — keep 30 m cells sharp (no browser blur). */
-.leaflet-georaster-layer canvas {
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+/* WFER canvas tiles — blocky 30 m cells, no browser smoothing. */
+.leaflet-tile.wfer-crisp-tile,
+.leaflet-safari .leaflet-tile.wfer-crisp-tile {
+  image-rendering: pixelated !important;
+  image-rendering: crisp-edges !important;
 }

@@ -14,7 +14,7 @@ pip install -r requirements.txt
 python scripts/prepare_raster.py
 ```
 
-This writes `docs/raster/wfer.tif`, `docs/raster/wfer_bounds.json`, and `docs/raster/cividis_lut.json`. The map renders the GeoTIFF in the browser (nearest-neighbor) so 30 m cells stay sharp at any zoom.
+This writes `docs/raster/wfer.tif`, `docs/raster/wfer_bounds.json`, and `docs/raster/cividis_lut.json`. The map downloads the GeoTIFF once, then paints each 30 m cell on canvas tiles (sharp at all zoom levels, no map server required).
 
 ### 2. Set up Supabase (once)
 
