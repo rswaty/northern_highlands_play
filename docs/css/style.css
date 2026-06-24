@@ -189,10 +189,19 @@ button.danger {
 }
 
 .wfer-legend-bar {
-  height: 12px;
+  height: 14px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: linear-gradient(to right, rgb(0, 180, 80), rgb(220, 200, 55), rgb(220, 50, 0));
+  background: linear-gradient(
+    to right,
+    #000004 0%,
+    #2c115a 18%,
+    #721f81 36%,
+    #b5367a 54%,
+    #e55c4e 72%,
+    #fbb574 86%,
+    #fcfdbf 100%
+  );
 }
 
 .wfer-legend-labels {

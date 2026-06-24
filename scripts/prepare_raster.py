@@ -22,8 +22,46 @@ OUTPUT_BOUNDS = OUTPUT_DIR / "wfer_bounds.json"
 NODATA = 2147483647
 
 
+def magma_lut() -> np.ndarray:
+    """256x3 RGB LUT — matplotlib magma (dark = low, bright = high)."""
+    try:
+        from matplotlib import colormaps
+
+        cmap = colormaps["magma"]
+        return (cmap(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
+    except (ImportError, AttributeError, KeyError):
+        try:
+            from matplotlib import cm
+
+            return (cm.get_cmap("magma")(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
+        except (ImportError, AttributeError):
+            pass
+        stops = np.array(
+            [
+                [0, 0, 4],
+                [28, 16, 68],
+                [79, 18, 123],
+                [129, 37, 129],
+                [181, 54, 122],
+                [229, 80, 100],
+                [251, 135, 97],
+                [254, 194, 135],
+                [252, 253, 191],
+            ],
+            dtype=np.float64,
+        )
+        positions = np.linspace(0, 1, len(stops))
+        targets = np.linspace(0, 1, 256)
+        lut = np.zeros((256, 3), dtype=np.uint8)
+        for i, t in enumerate(targets):
+            idx = int(np.clip(np.searchsorted(positions, t, side="right") - 1, 0, len(stops) - 2))
+            frac = (t - positions[idx]) / (positions[idx + 1] - positions[idx])
+            lut[i] = np.round(stops[idx] * (1 - frac) + stops[idx + 1] * frac).astype(np.uint8)
+        return lut
+
+
 def colorize_wfer(values: np.ndarray, nodata_mask: np.ndarray) -> np.ndarray:
-    """Map WFER values to RGBA (green -> yellow -> red)."""
+    """Map WFER values to RGBA using a magma-like, colorblind-friendly ramp."""
     rgba = np.zeros((*values.shape, 4), dtype=np.uint8)
     valid = ~nodata_mask
     if not np.any(valid):
@@ -34,11 +72,10 @@ def colorize_wfer(values: np.ndarray, nodata_mask: np.ndarray) -> np.ndarray:
     span = max(vmax - vmin, 1.0)
     t = np.clip((values - vmin) / span, 0.0, 1.0)
 
-    # green (low) -> yellow -> red (high)
-    rgba[..., 0] = np.where(valid, (t * 255).astype(np.uint8), 0)
-    rgba[..., 1] = np.where(valid, ((1 - np.abs(t - 0.5) * 2) * 200 + 55).astype(np.uint8), 0)
-    rgba[..., 2] = np.where(valid, ((1 - t) * 180).astype(np.uint8), 0)
-    rgba[..., 3] = np.where(valid, 190, 0)
+    lut = magma_lut()
+    indices = (t * 255).astype(np.uint8)
+    rgba[..., :3] = lut[indices]
+    rgba[..., 3] = np.where(valid, 215, 0)
     return rgba
 
 

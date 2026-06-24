@@ -32,9 +32,13 @@
     <aside class="sidebar">
       <div class="panel">
         <h2>Layers</h2>
+        <label>
+          Basemap
+          <select id="basemapSelect"></select>
+        </label>
         <label class="checkbox">
           <input id="toggleBasemap" type="checkbox" checked />
-          Roads &amp; labels (OpenStreetMap)
+          Show basemap
         </label>
         <label class="checkbox">
           <input id="toggleWfer" type="checkbox" checked />
@@ -43,11 +47,11 @@
         <div class="wfer-legend" aria-hidden="true">
           <div class="wfer-legend-bar"></div>
           <div class="wfer-legend-labels">
-            <span>Lower WFER</span>
-            <span>Higher WFER</span>
+            <span>Low WFER</span>
+            <span>High WFER</span>
           </div>
         </div>
-        <p class="hint">Wildland fire exposure rating (WFER): green = lower relative exposure, red = higher. Colors use the 2nd–98th percentile range for this dataset.</p>
+        <p class="hint">Wildland fire exposure rating (WFER): darker colors = lower relative exposure, brighter yellow = higher. Magma-style ramp using the 2nd–98th percentile range for this dataset.</p>
       </div>
 
       <div class="panel">
@@ -132,6 +136,6 @@
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="js/supabase-config.js"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/app.js?v=6"></script>
 </body>
 </html>

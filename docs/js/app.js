@@ -6,10 +6,62 @@
     "Other / unsure",
   ];
 
+  const BASEMAPS = {
+    osm: {
+      label: "Streets (OpenStreetMap)",
+      create: () =>
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+          maxZoom: 19,
+        }),
+    },
+    topo: {
+      label: "Topographic (OpenTopoMap)",
+      create: () =>
+        L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+          attribution:
+            'Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, <a href="https://opentopomap.org">OpenTopoMap</a>',
+          maxZoom: 17,
+        }),
+    },
+    esri_topo: {
+      label: "Topographic (Esri)",
+      create: () =>
+        L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+          {
+            attribution: "Tiles &copy; Esri",
+            maxZoom: 18,
+          }
+        ),
+    },
+    imagery: {
+      label: "Satellite (Esri)",
+      create: () =>
+        L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          {
+            attribution: "Tiles &copy; Esri",
+            maxZoom: 18,
+          }
+        ),
+    },
+    light: {
+      label: "Light gray (Carto)",
+      create: () =>
+        L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+          subdomains: "abcd",
+          maxZoom: 20,
+        }),
+    },
+  };
+
   const state = {
     map: null,
     wferLayer: null,
     basemapLayer: null,
+    basemapKey: "osm",
     drawnLayer: null,
     supabase: null,
     submissionId: localStorage.getItem("nh_submission_id"),
@@ -27,6 +79,7 @@
     deleteSubmissionBtn: document.getElementById("deleteSubmissionBtn"),
     exportBtn: document.getElementById("exportBtn"),
     toggleBasemap: document.getElementById("toggleBasemap"),
+    basemapSelect: document.getElementById("basemapSelect"),
     toggleWfer: document.getElementById("toggleWfer"),
     status: document.getElementById("status"),
     lastSaved: document.getElementById("lastSaved"),
@@ -342,6 +395,29 @@
     return div.innerHTML;
   }
 
+  function populateBasemapSelect() {
+    Object.entries(BASEMAPS).forEach(([key, cfg]) => {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = cfg.label;
+      els.basemapSelect.appendChild(opt);
+    });
+    els.basemapSelect.value = state.basemapKey;
+  }
+
+  function setBasemap(key) {
+    if (!BASEMAPS[key] || !state.map) return;
+    state.basemapKey = key;
+    const visible = els.toggleBasemap.checked;
+    if (state.basemapLayer) {
+      state.map.removeLayer(state.basemapLayer);
+    }
+    state.basemapLayer = BASEMAPS[key].create();
+    if (visible) {
+      state.basemapLayer.addTo(state.map);
+    }
+  }
+
   function populateTypeFilters() {
     TREATMENT_TYPES.forEach((type) => {
       const opt = document.createElement("option");
@@ -618,10 +694,7 @@
     const { bounds, overlayUrl } = config;
 
     state.map = L.map("map", { zoomControl: true });
-    state.basemapLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      maxZoom: 19,
-    }).addTo(state.map);
+    setBasemap(state.basemapKey);
 
     const southWest = L.latLng(bounds.south, bounds.west);
     const northEast = L.latLng(bounds.north, bounds.east);
@@ -668,6 +741,10 @@
 
     state.map.on("click", () => clearSelection());
   }
+
+  els.basemapSelect.addEventListener("change", () => {
+    setBasemap(els.basemapSelect.value);
+  });
 
   els.toggleBasemap.addEventListener("change", () => {
     if (els.toggleBasemap.checked) {
@@ -768,6 +845,7 @@
     await openSubmission(state.submissionId, { promptContinue: true });
   }
 
+  populateBasemapSelect();
   populateTypeFilters();
 
   fetchConfig()
