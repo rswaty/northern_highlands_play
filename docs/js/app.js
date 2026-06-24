@@ -469,6 +469,70 @@
     return band[row * width + col];
   }
 
+  function rasterProjection(gr) {
+    const projection = gr.projection;
+    if (typeof projection === "number") {
+      return `EPSG:${projection}`;
+    }
+    return projection || "EPSG:5070";
+  }
+
+  function sampleTileValues(gr, map, coords, tileSize) {
+    if (typeof proj4 !== "function") {
+      throw new Error("proj4 is required to render this GeoTIFF");
+    }
+
+    const band = gr.values[0];
+    const proj = rasterProjection(gr);
+    const pixelWidth = gr.pixelWidth;
+    const pixelHeight = Math.abs(gr.pixelHeight);
+    const tileOrigin = coords.scaleBy(tileSize);
+    const sampled = [];
+
+    for (let row = 0; row < tileSize; row += 1) {
+      const rowValues = [];
+      for (let col = 0; col < tileSize; col += 1) {
+        const latlng = map.unproject(tileOrigin.add([col, row]), coords.z);
+        const [mx, my] = proj4("EPSG:4326", proj, [latlng.lng, latlng.lat]);
+        const sourceCol = Math.floor((mx - gr.xmin) / pixelWidth);
+        const sourceRow = Math.floor((gr.ymax - my) / pixelHeight);
+        if (sourceCol < 0 || sourceRow < 0 || sourceCol >= gr.width || sourceRow >= gr.height) {
+          rowValues.push(null);
+          continue;
+        }
+        rowValues.push(readRasterValue(band, sourceRow, sourceCol, gr.width));
+      }
+      sampled.push(rowValues);
+    }
+
+    return [sampled];
+  }
+
+  function paintTileValues(ctx, values, tileSize, colorFn) {
+    const band = values?.[0];
+    if (!band) {
+      throw new Error("WFER tile values unavailable");
+    }
+
+    const imageData = ctx.createImageData(tileSize, tileSize);
+    const pixels = imageData.data;
+
+    for (let row = 0; row < tileSize; row += 1) {
+      for (let col = 0; col < tileSize; col += 1) {
+        const value = readRasterValue(band, row, col, tileSize);
+        const rgba = colorFn(value);
+        if (!rgba) continue;
+        const offset = (row * tileSize + col) * 4;
+        pixels[offset] = rgba[0];
+        pixels[offset + 1] = rgba[1];
+        pixels[offset + 2] = rgba[2];
+        pixels[offset + 3] = rgba[3];
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  }
+
   const WferCrispLayer = L.GridLayer.extend({
     options: {
       opacity: 0.85,
@@ -502,46 +566,26 @@
       const sePoint = nwPoint.add([tileSize, tileSize]);
       const nw = this._map.unproject(nwPoint, coords.z);
       const se = this._map.unproject(sePoint, coords.z);
+      const gr = this._georaster;
+      const tileRequest =
+        typeof gr.getValues === "function"
+          ? gr.getValues({
+              left: Math.min(nw.lng, se.lng),
+              right: Math.max(nw.lng, se.lng),
+              top: Math.max(nw.lat, se.lat),
+              bottom: Math.min(nw.lat, se.lat),
+              width: tileSize,
+              height: tileSize,
+              resampleMethod: "nearest",
+            })
+          : Promise.resolve(sampleTileValues(gr, this._map, coords, tileSize));
 
-      Promise.resolve(
-        this._georaster.getValues({
-          left: Math.min(nw.lng, se.lng),
-          right: Math.max(nw.lng, se.lng),
-          top: Math.max(nw.lat, se.lat),
-          bottom: Math.min(nw.lat, se.lat),
-          width: tileSize,
-          height: tileSize,
-          resampleMethod: "nearest",
-        })
-      )
+      Promise.resolve(tileRequest)
         .then((values) => {
           const ctx = canvas.getContext("2d");
           ctx.setTransform(scale, 0, 0, scale, 0, 0);
           ctx.imageSmoothingEnabled = false;
-
-          const band = values?.[0];
-          if (!band) {
-            done(new Error("WFER tile values unavailable"), canvas);
-            return;
-          }
-
-          const imageData = ctx.createImageData(tileSize, tileSize);
-          const pixels = imageData.data;
-
-          for (let row = 0; row < tileSize; row += 1) {
-            for (let col = 0; col < tileSize; col += 1) {
-              const value = readRasterValue(band, row, col, tileSize);
-              const rgba = this._colorFn(value);
-              if (!rgba) continue;
-              const offset = (row * tileSize + col) * 4;
-              pixels[offset] = rgba[0];
-              pixels[offset + 1] = rgba[1];
-              pixels[offset + 2] = rgba[2];
-              pixels[offset + 3] = rgba[3];
-            }
-          }
-
-          ctx.putImageData(imageData, 0, 0);
+          paintTileValues(ctx, values, tileSize, this._colorFn);
           done(null, canvas);
         })
         .catch((error) => {
@@ -562,14 +606,10 @@
     const { rasterUrl } = config;
     setStatus("Loading WFER raster (one-time download, ~17 MB)…");
 
-    const response = await fetch(rasterUrl);
-    if (!response.ok) {
-      throw new Error("Could not load WFER GeoTIFF");
-    }
-
-    const georaster = await parseGeoraster(await response.arrayBuffer());
-    if (!georaster.getValues) {
-      throw new Error("GeoTIFF parsed but getValues is unavailable");
+    const absoluteRasterUrl = new URL(rasterUrl, window.location.href).href;
+    const georaster = await parseGeoraster(absoluteRasterUrl);
+    if (!georaster.getValues && !georaster.values?.[0]) {
+      throw new Error("GeoTIFF parsed but cannot read pixel values");
     }
     state.wferLayer = createWferLayer(georaster, config);
 
