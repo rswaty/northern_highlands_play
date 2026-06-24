@@ -10,5 +10,6 @@ __pycache__/
 data/submissions/*.geojson
 
 docs/raster/tiles/
+docs/raster/wfer_overlay.png
 docs/raster/wfer_overlay.tif
 app/static/raster/

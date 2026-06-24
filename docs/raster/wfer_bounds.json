@@ -1,8 +1,11 @@
 {
-  "south": 45.301884160349104,
+  "south": 45.30196578648793,
   "west": -90.33773520210507,
-  "north": 46.34532792824917,
-  "east": -88.9568048249598,
+  "north": 46.345327928249155,
+  "east": -88.95686264924115,
   "crs": "EPSG:4326",
-  "overlayUrl": "raster/wfer_overlay.png"
+  "rasterUrl": "raster/wfer.tif",
+  "noData": 2147483647,
+  "vmin": 3352.0,
+  "vmax": 60021.0
 }

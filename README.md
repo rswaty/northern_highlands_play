@@ -14,7 +14,7 @@ pip install -r requirements.txt
 python scripts/prepare_raster.py
 ```
 
-This writes `docs/raster/wfer_overlay.png` and `docs/raster/wfer_bounds.json`.
+This writes `docs/raster/wfer.tif`, `docs/raster/wfer_bounds.json`, and `docs/raster/cividis_lut.json`. The map renders the GeoTIFF in the browser (nearest-neighbor) so 30 m cells stay sharp at any zoom.
 
 ### 2. Set up Supabase (once)
 
@@ -40,7 +40,7 @@ git commit -m "Add GitHub Pages participatory GIS with Supabase"
 git push origin main
 ```
 
-Include `docs/raster/wfer_overlay.png` (~6.5 MB) in the commit so GitHub Pages can serve it.
+Include `docs/raster/wfer.tif` (~17 MB) in the commit so GitHub Pages can serve it.
 
 ### 4. Enable GitHub Pages
 
@@ -116,9 +116,9 @@ st_read(doc, quiet = TRUE)
 |------|---------|
 | `docs/` | Static site served by GitHub Pages |
 | `docs/js/supabase-config.js` | Your Supabase URL and anon key |
-| `docs/raster/` | WFER web overlay (generated) |
+| `docs/raster/` | WFER GeoTIFF + metadata for client-side rendering |
 | `inputs/wfer.tif` | Source WFER raster |
-| `scripts/prepare_raster.py` | Build web overlay |
+| `scripts/prepare_raster.py` | Copy GeoTIFF and build map metadata |
 | `supabase/schema.sql` | Database table and access rules |
 
 ## Notes

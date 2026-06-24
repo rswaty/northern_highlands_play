@@ -330,3 +330,9 @@ button.danger {
     border-top: 1px solid var(--border);
   }
 }
+
+/* GeoRaster canvas tiles — keep 30 m cells sharp (no browser blur). */
+.leaflet-georaster-layer canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}

@@ -428,16 +428,62 @@
     });
   }
 
+  let cividisLut = null;
+
   async function fetchConfig() {
     const res = await fetch("raster/wfer_bounds.json");
     if (!res.ok) {
-      throw new Error("Raster overlay not found. Run: python scripts/prepare_raster.py");
+      throw new Error("Raster config not found. Run: python scripts/prepare_raster.py");
     }
     const bounds = await res.json();
+    const lutRes = await fetch("raster/cividis_lut.json");
+    if (!lutRes.ok) {
+      throw new Error("Color ramp not found. Run: python scripts/prepare_raster.py");
+    }
+    cividisLut = await lutRes.json();
     return {
       bounds,
-      overlayUrl: bounds.overlayUrl || "raster/wfer_overlay.png",
+      rasterUrl: bounds.rasterUrl || "raster/wfer.tif",
+      noData: bounds.noData ?? 2147483647,
+      vmin: bounds.vmin,
+      vmax: bounds.vmax,
     };
+  }
+
+  function wferValueToColor(value, vmin, vmax, noData) {
+    if (value == null || !Number.isFinite(value) || value >= noData - 1 || value < 0) {
+      return null;
+    }
+    const span = Math.max(vmax - vmin, 1);
+    const t = Math.max(0, Math.min(1, (value - vmin) / span));
+    const idx = Math.round(t * 255);
+    const rgb = cividisLut[idx];
+    return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.85)`;
+  }
+
+  async function loadWferLayer(config) {
+    const { rasterUrl, noData, vmin, vmax } = config;
+    setStatus("Loading WFER raster (one-time download)…");
+
+    const response = await fetch(rasterUrl);
+    if (!response.ok) {
+      throw new Error("Could not load WFER GeoTIFF");
+    }
+
+    const georaster = await parseGeoraster(await response.arrayBuffer());
+    state.wferLayer = new GeoRasterLayer({
+      georaster,
+      opacity: 0.85,
+      resampleMethod: "nearest",
+      resolution: 512,
+      pixelValuesToColorFn(values) {
+        return wferValueToColor(values[0], vmin, vmax, noData);
+      },
+    });
+
+    if (els.toggleWfer.checked) {
+      state.wferLayer.addTo(state.map);
+    }
   }
 
   async function cleanupEmptySubmissions(rows) {
@@ -694,7 +740,7 @@
   }
 
   function initMap(config) {
-    const { bounds, overlayUrl } = config;
+    const { bounds } = config;
 
     state.map = L.map("map", { zoomControl: true });
     setBasemap(state.basemapKey);
@@ -702,8 +748,6 @@
     const southWest = L.latLng(bounds.south, bounds.west);
     const northEast = L.latLng(bounds.north, bounds.east);
     const imageBounds = L.latLngBounds(southWest, northEast);
-
-    state.wferLayer = L.imageOverlay(overlayUrl, imageBounds, { opacity: 0.85 }).addTo(state.map);
     state.map.fitBounds(imageBounds);
 
     state.drawnLayer = L.featureGroup().addTo(state.map);
@@ -758,6 +802,7 @@
   });
 
   els.toggleWfer.addEventListener("change", () => {
+    if (!state.wferLayer) return;
     if (els.toggleWfer.checked) {
       state.wferLayer.addTo(state.map);
     } else {
@@ -854,10 +899,15 @@
   fetchConfig()
     .then(async (config) => {
       initMap(config);
+      try {
+        await loadWferLayer(config);
+      } catch (error) {
+        setStatus(`WFER load failed: ${error.message}`, true);
+      }
       refreshAreasList();
       if (!state.supabase) {
         setStatus("Map ready. Configure Supabase in docs/js/supabase-config.js to enable saving.");
-      } else {
+      } else if (!els.status.style.color) {
         setStatus("Map ready. Draw polygons to mark priority areas.");
       }
       await refreshSubmissions();
