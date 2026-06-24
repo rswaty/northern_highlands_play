@@ -428,200 +428,32 @@
     });
   }
 
-  let cividisLut = null;
-
   async function fetchConfig() {
     const res = await fetch("raster/wfer_bounds.json");
     if (!res.ok) {
-      throw new Error("Raster config not found. Run: python scripts/prepare_raster.py");
+      throw new Error("Raster config not found. Run: python3 scripts/prepare_raster.py");
     }
     const bounds = await res.json();
-    const lutRes = await fetch("raster/cividis_lut.json");
-    if (!lutRes.ok) {
-      throw new Error("Color ramp not found. Run: python scripts/prepare_raster.py");
-    }
-    cividisLut = await lutRes.json();
     return {
       bounds,
-      rasterUrl: bounds.rasterUrl || "raster/wfer.tif",
-      noData: bounds.noData ?? 2147483647,
-      vmin: bounds.vmin,
-      vmax: bounds.vmax,
+      overlayUrl: bounds.overlayUrl || "raster/wfer_overlay.png",
     };
   }
 
-  function wferValueToRgba(value, vmin, vmax, noData) {
-    if (value == null || !Number.isFinite(value) || value >= noData - 1 || value < 0) {
-      return null;
-    }
-    const span = Math.max(vmax - vmin, 1);
-    const t = Math.max(0, Math.min(1, (value - vmin) / span));
-    const idx = Math.round(t * 255);
-    const rgb = cividisLut[idx];
-    return [rgb[0], rgb[1], rgb[2], 217];
-  }
-
-  function readRasterValue(band, row, col, width) {
-    if (!band) return null;
-    if (Array.isArray(band[0])) {
-      return band[row]?.[col];
-    }
-    return band[row * width + col];
-  }
-
-  function normalizeGeoraster(gr) {
-    const xmin = gr.xmin ?? gr.mins?.[0];
-    const ymax = gr.ymax ?? gr.maxs?.[1];
-    const pixelWidth = gr.pixelWidth;
-    const pixelHeight = gr.pixelHeight;
-    if (![xmin, ymax, pixelWidth, pixelHeight, gr.width, gr.height].every(Number.isFinite)) {
-      throw new Error("GeoTIFF metadata is incomplete");
-    }
-    return { ...gr, xmin, ymax, pixelWidth, pixelHeight };
-  }
-
-  function rasterProjection(gr) {
-    const projection = gr.projection;
-    if (typeof projection === "number") {
-      return `EPSG:${projection}`;
-    }
-    return projection || "EPSG:5070";
-  }
-
-  function sampleTileValues(gr, map, coords, tileSize) {
-    if (typeof proj4 !== "function") {
-      throw new Error("proj4 is required to render this GeoTIFF");
-    }
-
-    const band = gr.values[0];
-    const proj = rasterProjection(gr);
-    const pixelWidth = gr.pixelWidth;
-    const pixelHeight = Math.abs(gr.pixelHeight);
-    const tileOrigin = coords.scaleBy(tileSize);
-    const sampled = [];
-
-    for (let row = 0; row < tileSize; row += 1) {
-      const rowValues = [];
-      for (let col = 0; col < tileSize; col += 1) {
-        const latlng = map.unproject(tileOrigin.add([col, row]), coords.z);
-        if (!Number.isFinite(latlng.lat) || !Number.isFinite(latlng.lng)) {
-          rowValues.push(null);
-          continue;
-        }
-        const [mx, my] = proj4("EPSG:4326", proj, [latlng.lng, latlng.lat]);
-        const sourceCol = Math.floor((mx - gr.xmin) / pixelWidth);
-        const sourceRow = Math.floor((gr.ymax - my) / pixelHeight);
-        if (sourceCol < 0 || sourceRow < 0 || sourceCol >= gr.width || sourceRow >= gr.height) {
-          rowValues.push(null);
-          continue;
-        }
-        rowValues.push(readRasterValue(band, sourceRow, sourceCol, gr.width));
-      }
-      sampled.push(rowValues);
-    }
-
-    return [sampled];
-  }
-
-  function paintTileValues(ctx, values, tileSize, colorFn) {
-    const band = values?.[0];
-    if (!band) {
-      throw new Error("WFER tile values unavailable");
-    }
-
-    const imageData = ctx.createImageData(tileSize, tileSize);
-    const pixels = imageData.data;
-
-    for (let row = 0; row < tileSize; row += 1) {
-      for (let col = 0; col < tileSize; col += 1) {
-        const value = readRasterValue(band, row, col, tileSize);
-        const rgba = colorFn(value);
-        if (!rgba) continue;
-        const offset = (row * tileSize + col) * 4;
-        pixels[offset] = rgba[0];
-        pixels[offset + 1] = rgba[1];
-        pixels[offset + 2] = rgba[2];
-        pixels[offset + 3] = rgba[3];
-      }
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-  }
-
-  const WferCrispLayer = L.GridLayer.extend({
-    options: {
-      opacity: 0.85,
-      pane: "overlayPane",
-      updateWhenZooming: false,
-      updateWhenIdle: true,
-      keepBuffer: 1,
-    },
-
-    initialize(georaster, colorFn, options) {
-      L.setOptions(this, options);
-      this._georaster = georaster;
-      this._colorFn = colorFn;
-    },
-
-    createTile(coords, done) {
-      const tileSize = this.getTileSize().x;
-      const scale = L.Browser.retina ? 2 : 1;
-      const canvas = L.DomUtil.create("canvas", "leaflet-tile wfer-crisp-tile");
-      canvas.width = tileSize * scale;
-      canvas.height = tileSize * scale;
-      canvas.style.width = `${tileSize}px`;
-      canvas.style.height = `${tileSize}px`;
-
-      if (!this._map) {
-        done(null, canvas);
-        return canvas;
-      }
-
-      try {
-        const ctx = canvas.getContext("2d");
-        ctx.setTransform(scale, 0, 0, scale, 0, 0);
-        ctx.imageSmoothingEnabled = false;
-        const values = sampleTileValues(this._georaster, this._map, coords, tileSize);
-        paintTileValues(ctx, values, tileSize, this._colorFn);
-        done(null, canvas);
-      } catch (error) {
-        console.error("WFER tile render failed:", error);
-        done(error, canvas);
-      }
-
-      return canvas;
-    },
-  });
-
-  function createWferLayer(georaster, config) {
-    const { bounds, noData, vmin, vmax } = config;
-    const layerBounds = L.latLngBounds(
+  function wferBoundsLatLng(bounds) {
+    return L.latLngBounds(
       [bounds.south, bounds.west],
       [bounds.north, bounds.east]
     );
-    return new WferCrispLayer(
-      georaster,
-      (value) => wferValueToRgba(value, vmin, vmax, noData),
-      { bounds: layerBounds }
-    );
+  }
+
+  function createWferLayer(config) {
+    const { bounds, overlayUrl } = config;
+    return L.imageOverlay(overlayUrl, wferBoundsLatLng(bounds), { opacity: 0.85 });
   }
 
   async function loadWferLayer(config) {
-    const { rasterUrl } = config;
-    setStatus("Loading WFER raster (one-time download, ~17 MB)…");
-
-    const absoluteRasterUrl = new URL(rasterUrl, window.location.href).href;
-    const response = await fetch(absoluteRasterUrl);
-    if (!response.ok) {
-      throw new Error("Could not load WFER GeoTIFF");
-    }
-
-    const georaster = normalizeGeoraster(await parseGeoraster(await response.arrayBuffer()));
-    if (!georaster.values?.[0]) {
-      throw new Error("GeoTIFF parsed but pixel values are unavailable");
-    }
-    state.wferLayer = createWferLayer(georaster, config);
-
+    state.wferLayer = createWferLayer(config);
     if (els.toggleWfer.checked) {
       state.wferLayer.addTo(state.map);
     }
@@ -891,8 +723,7 @@
 
     const southWest = L.latLng(bounds.south, bounds.west);
     const northEast = L.latLng(bounds.north, bounds.east);
-    const imageBounds = L.latLngBounds(southWest, northEast);
-    state.map.fitBounds(imageBounds);
+    state.map.fitBounds(L.latLngBounds(southWest, northEast));
 
     state.drawnLayer = L.featureGroup().addTo(state.map);
     state.map.pm.setGlobalOptions({ layerGroup: state.drawnLayer });
@@ -1043,11 +874,7 @@
   fetchConfig()
     .then(async (config) => {
       initMap(config);
-      try {
-        await loadWferLayer(config);
-      } catch (error) {
-        setStatus(`WFER load failed: ${error.message}`, true);
-      }
+      await loadWferLayer(config);
       refreshAreasList();
       if (!state.supabase) {
         setStatus("Map ready. Configure Supabase in docs/js/supabase-config.js to enable saving.");
