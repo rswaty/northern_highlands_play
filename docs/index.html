@@ -19,8 +19,9 @@
         Your name
         <input id="participant" type="text" placeholder="e.g. Forest Service, Tribal liaison" />
       </label>
-      <button id="saveBtn" class="primary">Save polygons</button>
-      <button id="loadBtn">Load saved</button>
+      <button id="saveAllBtn" class="primary" title="Save all areas on the map">Save all</button>
+      <button id="newSubmissionBtn" title="Clear the map and start a new submission">Start new</button>
+      <button id="deleteSubmissionBtn" class="danger" title="Remove your saved submission entirely">Delete my submission</button>
       <button id="exportBtn">Download GeoJSON</button>
     </div>
   </header>
@@ -39,13 +40,47 @@
           <input id="toggleWfer" type="checkbox" checked />
           WFER raster overlay
         </label>
-        <p class="hint">Higher WFER values appear more red; lower values more green.</p>
+        <div class="wfer-legend" aria-hidden="true">
+          <div class="wfer-legend-bar"></div>
+          <div class="wfer-legend-labels">
+            <span>Lower WFER</span>
+            <span>Higher WFER</span>
+          </div>
+        </div>
+        <p class="hint">Wildland fire exposure rating (WFER): green = lower relative exposure, red = higher. Colors use the 2nd–98th percentile range for this dataset.</p>
       </div>
 
       <div class="panel">
         <h2>Draw polygons</h2>
-        <p class="hint">Use the toolbar on the map to draw a polygon. Click a shape to edit its details.</p>
+        <p class="hint">Use the toolbar on the map to draw a polygon or rectangle. Click a shape to edit it.</p>
         <div id="status" class="status">Loading map…</div>
+        <div id="lastSaved" class="hint last-saved" hidden></div>
+      </div>
+
+      <div class="panel" id="yourAreasPanel">
+        <div class="panel-header-row">
+          <h2>Your areas <span id="yourAreasCount" class="badge">0</span></h2>
+          <label class="filter-label">
+            Filter
+            <select id="areaTypeFilter">
+              <option value="">All types</option>
+            </select>
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="areas-table" id="areasTable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="areasTableBody">
+              <tr class="empty-row"><td colspan="3" class="hint">Draw a polygon to add your first area.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="panel" id="featurePanel" hidden>
@@ -63,26 +98,40 @@
           </label>
           <label>
             Notes
-            <textarea id="featureNotes" rows="5" placeholder="Why prioritize here? Concerns, opportunities, timing…"></textarea>
+            <textarea id="featureNotes" rows="4" placeholder="Why prioritize here? Concerns, opportunities, timing…"></textarea>
           </label>
-          <div class="form-actions">
-            <button type="submit" class="primary">Update area</button>
+          <div class="form-actions form-actions-wrap">
+            <button type="button" id="renameFeatureBtn">Rename</button>
+            <button type="submit" class="primary" id="saveAreaBtn">Save area</button>
             <button type="button" id="deleteFeatureBtn" class="danger">Delete area</button>
           </div>
+          <p class="hint">Save area stores this polygon to the database. Use Save all in the header to save everything at once.</p>
         </form>
       </div>
 
       <div class="panel">
-        <h2>Saved submissions</h2>
+        <h2>All participants</h2>
+        <p class="hint">Submissions from everyone using this map.</p>
         <ul id="submissionList" class="submission-list"></ul>
       </div>
     </aside>
   </main>
 
+  <dialog id="continueDialog" class="modal">
+    <form method="dialog" class="modal-card">
+      <h2>Continue where you left off?</h2>
+      <p id="continueDialogText" class="hint">You have a saved submission in this browser.</p>
+      <div class="form-actions">
+        <button type="submit" value="continue" class="primary">Continue editing</button>
+        <button type="submit" value="fresh">Start fresh</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="js/supabase-config.js"></script>
-  <script src="js/app.js?v=4"></script>
+  <script src="js/app.js?v=5"></script>
 </body>
 </html>

@@ -15,23 +15,35 @@
     submissionId: localStorage.getItem("nh_submission_id"),
     selectedLayer: null,
     treatmentTypes: TREATMENT_TYPES,
+    lastSavedAt: null,
+    pendingRestore: null,
+    areaFilter: "",
   };
 
   const els = {
     participant: document.getElementById("participant"),
-    saveBtn: document.getElementById("saveBtn"),
-    loadBtn: document.getElementById("loadBtn"),
+    saveAllBtn: document.getElementById("saveAllBtn"),
+    newSubmissionBtn: document.getElementById("newSubmissionBtn"),
+    deleteSubmissionBtn: document.getElementById("deleteSubmissionBtn"),
     exportBtn: document.getElementById("exportBtn"),
     toggleBasemap: document.getElementById("toggleBasemap"),
     toggleWfer: document.getElementById("toggleWfer"),
     status: document.getElementById("status"),
+    lastSaved: document.getElementById("lastSaved"),
     featurePanel: document.getElementById("featurePanel"),
     featureForm: document.getElementById("featureForm"),
     featureName: document.getElementById("featureName"),
     featureType: document.getElementById("featureType"),
     featureNotes: document.getElementById("featureNotes"),
+    renameFeatureBtn: document.getElementById("renameFeatureBtn"),
+    saveAreaBtn: document.getElementById("saveAreaBtn"),
     deleteFeatureBtn: document.getElementById("deleteFeatureBtn"),
+    areasTableBody: document.getElementById("areasTableBody"),
+    yourAreasCount: document.getElementById("yourAreasCount"),
+    areaTypeFilter: document.getElementById("areaTypeFilter"),
     submissionList: document.getElementById("submissionList"),
+    continueDialog: document.getElementById("continueDialog"),
+    continueDialogText: document.getElementById("continueDialogText"),
   };
 
   function setStatus(message, isError = false) {
@@ -39,22 +51,35 @@
     els.status.style.color = isError ? "#b42318" : "";
   }
 
+  function setLastSaved(isoString) {
+    state.lastSavedAt = isoString;
+    if (!isoString) {
+      els.lastSaved.hidden = true;
+      els.lastSaved.textContent = "";
+      return;
+    }
+    const when = new Date(isoString);
+    els.lastSaved.hidden = false;
+    els.lastSaved.textContent = `Last saved ${when.toLocaleString()}`;
+  }
+
   function newSubmissionId() {
+    return crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  }
+
+  function newAreaId() {
     return crypto.randomUUID().replace(/-/g, "").slice(0, 8);
   }
 
   function normalizeSupabaseUrl(url) {
     if (!url) return url;
-    // Data API page often shows .../rest/v1 — the client adds that itself.
     return url.trim().replace(/\/rest\/v1\/?$/, "").replace(/\/$/, "");
   }
 
   function initSupabase() {
     const url = normalizeSupabaseUrl(window.SUPABASE_URL);
     const key = window.SUPABASE_ANON_KEY?.trim();
-    if (!url || !key) {
-      return null;
-    }
+    if (!url || !key) return null;
     return window.supabase.createClient(url, key);
   }
 
@@ -72,10 +97,34 @@
     return 0;
   }
 
-  function clearSession() {
+  function ensureLayerProperties(layer) {
+    layer.feature = layer.feature || {
+      type: "Feature",
+      properties: {},
+      geometry: layer.toGeoJSON().geometry,
+    };
+    layer.feature.properties = layer.feature.properties || {};
+    if (!layer.feature.properties.areaId) {
+      layer.feature.properties.areaId = newAreaId();
+    }
+    return layer.feature.properties;
+  }
+
+  function clearSession({ keepName = false } = {}) {
     state.submissionId = null;
     localStorage.removeItem("nh_submission_id");
-    els.participant.value = "";
+    if (!keepName) {
+      els.participant.value = "";
+    }
+    setLastSaved(null);
+  }
+
+  function clearMap() {
+    if (state.drawnLayer) {
+      state.drawnLayer.clearLayers();
+    }
+    clearSelection();
+    refreshAreasList();
   }
 
   function getDrawnLayers() {
@@ -119,29 +168,35 @@
   }
 
   function layerToFeature(layer) {
+    ensureLayerProperties(layer);
     const geo = layer.toGeoJSON();
     geo.properties = {
-      ...(layer.feature?.properties || {}),
-      name: layer.feature?.properties?.name || "",
-      treatmentType: layer.feature?.properties?.treatmentType || "",
-      notes: layer.feature?.properties?.notes || "",
+      ...layer.feature.properties,
+      name: layer.feature.properties.name || "",
+      treatmentType: layer.feature.properties.treatmentType || "",
+      notes: layer.feature.properties.notes || "",
+      areaId: layer.feature.properties.areaId,
     };
     return geo;
   }
 
   function bindLayer(layer) {
+    ensureLayerProperties(layer);
     layer.on("click", (event) => {
       L.DomEvent.stopPropagation(event);
       selectLayer(layer);
     });
     layer.on("pm:edit", () => {
+      ensureLayerProperties(layer);
+      layer.feature.geometry = layer.toGeoJSON().geometry;
       if (state.selectedLayer === layer) {
         syncFormFromLayer(layer);
       }
+      refreshAreasList();
     });
   }
 
-  function selectLayer(layer) {
+  function selectLayer(layer, { zoom = false } = {}) {
     if (state.selectedLayer && state.selectedLayer !== layer) {
       state.selectedLayer.setStyle(defaultStyle());
     }
@@ -150,6 +205,10 @@
     layer.bringToFront();
     syncFormFromLayer(layer);
     els.featurePanel.hidden = false;
+    refreshAreasList();
+    if (zoom && layer.getBounds) {
+      state.map.fitBounds(layer.getBounds().pad(0.15));
+    }
   }
 
   function clearSelection() {
@@ -158,6 +217,7 @@
     }
     state.selectedLayer = null;
     els.featurePanel.hidden = true;
+    refreshAreasList();
   }
 
   function syncFormFromLayer(layer) {
@@ -167,17 +227,26 @@
     els.featureNotes.value = props.notes || "";
   }
 
-  function applyFormToLayer(layer) {
-    layer.feature = layer.feature || { type: "Feature", properties: {}, geometry: layer.toGeoJSON().geometry };
-    layer.feature.properties = {
-      ...layer.feature.properties,
-      name: els.featureName.value.trim(),
-      treatmentType: els.featureType.value,
-      notes: els.featureNotes.value.trim(),
-    };
+  function applyFormToLayer(layer, { nameOnly = false } = {}) {
+    ensureLayerProperties(layer);
+    if (nameOnly) {
+      layer.feature.properties.name = els.featureName.value.trim();
+    } else {
+      layer.feature.properties = {
+        ...layer.feature.properties,
+        name: els.featureName.value.trim(),
+        treatmentType: els.featureType.value,
+        notes: els.featureNotes.value.trim(),
+      };
+    }
+    layer.feature.geometry = layer.toGeoJSON().geometry;
 
-    const label = layer.feature.properties.name || layer.feature.properties.treatmentType || "Priority area";
+    const label =
+      layer.feature.properties.name ||
+      layer.feature.properties.treatmentType ||
+      "Priority area";
     layer.bindTooltip(label, { sticky: true });
+    refreshAreasList();
   }
 
   function featuresFromMap() {
@@ -190,13 +259,15 @@
     features.forEach((feature) => {
       const layer = L.geoJSON(feature, { style: defaultStyle() }).getLayers()[0];
       layer.feature = feature;
+      ensureLayerProperties(layer);
       bindLayer(layer);
-      if (feature.properties?.name || feature.properties?.treatmentType) {
-        const label = feature.properties.name || feature.properties.treatmentType;
+      const label = feature.properties?.name || feature.properties?.treatmentType;
+      if (label) {
         layer.bindTooltip(label, { sticky: true });
       }
       state.drawnLayer.addLayer(layer);
     });
+    refreshAreasList();
     if (features.length) {
       const bounds = state.drawnLayer.getBounds();
       if (bounds.isValid()) {
@@ -205,17 +276,89 @@
     }
   }
 
+  function layerMatchesFilter(layer) {
+    if (!state.areaFilter) return true;
+    const type = layer.feature?.properties?.treatmentType || "";
+    return type === state.areaFilter;
+  }
+
+  function refreshAreasList() {
+    const layers = getDrawnLayers();
+    els.yourAreasCount.textContent = String(layers.length);
+
+    const visible = layers.filter(layerMatchesFilter);
+    els.areasTableBody.innerHTML = "";
+
+    if (!layers.length) {
+      const row = document.createElement("tr");
+      row.className = "empty-row";
+      row.innerHTML = '<td colspan="3" class="hint">Draw a polygon to add your first area.</td>';
+      els.areasTableBody.appendChild(row);
+      return;
+    }
+
+    if (!visible.length) {
+      const row = document.createElement("tr");
+      row.className = "empty-row";
+      row.innerHTML = '<td colspan="3" class="hint">No areas match this filter.</td>';
+      els.areasTableBody.appendChild(row);
+      return;
+    }
+
+    visible.forEach((layer) => {
+      ensureLayerProperties(layer);
+      const props = layer.feature.properties;
+      const tr = document.createElement("tr");
+      if (state.selectedLayer === layer) {
+        tr.classList.add("selected-row");
+      }
+
+      const name = props.name || "Unnamed area";
+      const type = props.treatmentType || "—";
+
+      tr.innerHTML = `
+        <td>${escapeHtml(name)}</td>
+        <td class="type-cell">${escapeHtml(type)}</td>
+        <td><button type="button" class="zoom-btn">Zoom</button></td>
+      `;
+
+      tr.addEventListener("click", (event) => {
+        if (event.target.closest(".zoom-btn")) return;
+        selectLayer(layer);
+      });
+
+      tr.querySelector(".zoom-btn").addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectLayer(layer, { zoom: true });
+      });
+
+      els.areasTableBody.appendChild(tr);
+    });
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function populateTypeFilters() {
+    TREATMENT_TYPES.forEach((type) => {
+      const opt = document.createElement("option");
+      opt.value = type;
+      opt.textContent = type;
+      els.featureType.appendChild(opt.cloneNode(true));
+      els.areaTypeFilter.appendChild(opt);
+    });
+  }
+
   async function fetchConfig() {
     const res = await fetch("raster/wfer_bounds.json");
     if (!res.ok) {
       throw new Error("Raster overlay not found. Run: python scripts/prepare_raster.py");
     }
     const bounds = await res.json();
-    return {
-      bounds,
-      overlayUrl: "raster/wfer_overlay.png",
-      treatmentTypes: TREATMENT_TYPES,
-    };
+    return { bounds, overlayUrl: "raster/wfer_overlay.png" };
   }
 
   async function cleanupEmptySubmissions(rows) {
@@ -257,8 +400,7 @@
     saved.forEach((item) => {
       const li = document.createElement("li");
       const label = document.createElement("span");
-      const count = featureCount(item);
-      label.textContent = `${item.participant} (${count} areas)`;
+      label.textContent = `${item.participant} (${featureCount(item)} areas)`;
       const btn = document.createElement("button");
       btn.textContent = "Open";
       btn.addEventListener("click", () => openSubmission(item.id));
@@ -267,7 +409,7 @@
     });
   }
 
-  async function openSubmission(id) {
+  async function openSubmission(id, { promptContinue = false } = {}) {
     if (!state.supabase) {
       setStatus("Supabase is not configured.", true);
       return;
@@ -291,17 +433,30 @@
       return;
     }
 
-    state.submissionId = id;
-    localStorage.setItem("nh_submission_id", id);
-    els.participant.value = data.participant || "";
-    loadFeatures(data.features || []);
-    setStatus(`Loaded submission from ${data.participant || "participant"}.`);
+    if (promptContinue) {
+      state.pendingRestore = data;
+      const count = featureCount(data);
+      els.continueDialogText.textContent = `You have ${count} saved area(s) as "${data.participant || "Anonymous"}". Continue editing or start with a blank map?`;
+      els.continueDialog.showModal();
+      return;
+    }
+
+    applySubmissionData(data);
   }
 
-  async function saveSubmission() {
+  function applySubmissionData(data) {
+    state.submissionId = data.id;
+    localStorage.setItem("nh_submission_id", data.id);
+    els.participant.value = data.participant || "";
+    loadFeatures(data.features || []);
+    setLastSaved(data.updated_at || data.created_at);
+    setStatus(`Loaded ${featureCount(data)} area(s) for ${data.participant || "participant"}.`);
+  }
+
+  async function saveSubmission({ quiet = false } = {}) {
     if (!state.supabase) {
-      setStatus("Supabase is not configured. Edit docs/js/supabase-config.js", true);
-      return;
+      setStatus("Supabase is not configured.", true);
+      return false;
     }
 
     const participant = els.participant.value.trim() || "Anonymous";
@@ -309,8 +464,26 @@
     const now = new Date().toISOString();
 
     if (!features.length) {
-      setStatus("No polygons on the map to save. Draw at least one area first.", true);
-      return;
+      if (state.submissionId) {
+        const { error } = await state.supabase
+          .from("submissions")
+          .delete()
+          .eq("id", state.submissionId);
+        if (error) {
+          setStatus(`Could not remove submission: ${error.message}`, true);
+          return false;
+        }
+        clearSession({ keepName: true });
+        if (!quiet) {
+          setStatus("All areas removed — your submission was deleted.");
+        }
+        await refreshSubmissions();
+        return true;
+      }
+      if (!quiet) {
+        setStatus("No polygons on the map to save. Draw an area first.", true);
+      }
+      return false;
     }
 
     if (state.submissionId) {
@@ -321,7 +494,7 @@
 
       if (error) {
         setStatus(`Save failed: ${error.message}`, true);
-        return;
+        return false;
       }
     } else {
       const id = newSubmissionId();
@@ -335,15 +508,92 @@
 
       if (error) {
         setStatus(`Save failed: ${error.message}`, true);
-        return;
+        return false;
       }
 
       state.submissionId = id;
       localStorage.setItem("nh_submission_id", id);
     }
 
-    setStatus(`Saved ${features.length} area(s) for ${participant}.`);
-    refreshSubmissions();
+    setLastSaved(now);
+    if (!quiet) {
+      setStatus(`Saved ${features.length} area(s) for ${participant}.`);
+    }
+    await refreshSubmissions();
+    return true;
+  }
+
+  async function saveSelectedArea({ nameOnly = false } = {}) {
+    if (!state.selectedLayer) return false;
+
+    if (nameOnly) {
+      const name = els.featureName.value.trim();
+      if (!name) {
+        setStatus("Enter a name to rename this area.", true);
+        els.featureName.focus();
+        return false;
+      }
+      applyFormToLayer(state.selectedLayer, { nameOnly: true });
+    } else {
+      applyFormToLayer(state.selectedLayer);
+    }
+
+    const ok = await saveSubmission({ quiet: true });
+    if (ok) {
+      const label = nameOnly ? "Renamed and saved" : "Area saved";
+      const areaName = state.selectedLayer.feature.properties.name || "area";
+      setStatus(`${label}: ${areaName}.`);
+    }
+    return ok;
+  }
+
+  async function deleteSubmission() {
+    if (!state.supabase) {
+      setStatus("Supabase is not configured.", true);
+      return;
+    }
+
+    const hasMapAreas = getDrawnLayers().length > 0;
+    const message = state.submissionId
+      ? "Delete your saved submission from the database and clear the map?"
+      : hasMapAreas
+        ? "Clear all areas from the map?"
+        : null;
+
+    if (!message) {
+      setStatus("Nothing to delete.");
+      return;
+    }
+
+    if (!window.confirm(message)) return;
+
+    if (state.submissionId) {
+      const { error } = await state.supabase
+        .from("submissions")
+        .delete()
+        .eq("id", state.submissionId);
+      if (error) {
+        setStatus(`Delete failed: ${error.message}`, true);
+        return;
+      }
+    }
+
+    clearSession();
+    clearMap();
+    await refreshSubmissions();
+    setStatus("Submission deleted. You can start fresh.");
+  }
+
+  function startNewSubmission({ confirmIfDirty = true } = {}) {
+    const hasAreas = getDrawnLayers().length > 0;
+    if (confirmIfDirty && hasAreas) {
+      if (!window.confirm("Start a new submission? Unsaved changes on the map will be cleared.")) {
+        return;
+      }
+    }
+    clearSession({ keepName: true });
+    clearMap();
+    setStatus("Ready for a new submission. Draw areas and click Save all.");
   }
 
   function exportGeoJSON() {
@@ -366,12 +616,6 @@
 
   function initMap(config) {
     const { bounds, overlayUrl } = config;
-    config.treatmentTypes.forEach((type) => {
-      const opt = document.createElement("option");
-      opt.value = type;
-      opt.textContent = type;
-      els.featureType.appendChild(opt);
-    });
 
     state.map = L.map("map", { zoomControl: true });
     state.basemapLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -405,10 +649,11 @@
     state.map.on("pm:create", (event) => {
       const layer = event.layer;
       layer.feature = { type: "Feature", properties: {}, geometry: layer.toGeoJSON().geometry };
+      ensureLayerProperties(layer);
       state.drawnLayer.addLayer(layer);
       bindLayer(layer);
       selectLayer(layer);
-      setStatus("Polygon created. Add a name, type, and notes, then click Update area.");
+      setStatus("Area drawn. Add details below, then Save area or Save all.");
     });
 
     state.map.on("pm:remove", (event) => {
@@ -418,6 +663,7 @@
       if (state.selectedLayer === event.layer) {
         clearSelection();
       }
+      refreshAreasList();
     });
 
     state.map.on("click", () => clearSelection());
@@ -439,29 +685,66 @@
     }
   });
 
-  els.featureForm.addEventListener("submit", (event) => {
+  els.featureForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!state.selectedLayer) return;
-    applyFormToLayer(state.selectedLayer);
-    setStatus("Area details updated. Remember to Save polygons when finished.");
+    await saveSelectedArea();
   });
 
-  els.deleteFeatureBtn.addEventListener("click", () => {
+  els.renameFeatureBtn.addEventListener("click", async () => {
+    if (!state.selectedLayer) return;
+    if (!els.featureName.value.trim()) {
+      els.featureName.focus();
+      setStatus("Enter a name, then click Rename.", true);
+      return;
+    }
+    await saveSelectedArea({ nameOnly: true });
+  });
+
+  els.deleteFeatureBtn.addEventListener("click", async () => {
     if (!state.selectedLayer) return;
     state.drawnLayer.removeLayer(state.selectedLayer);
     clearSelection();
-    setStatus("Area removed from the map.");
-  });
+    refreshAreasList();
 
-  els.saveBtn.addEventListener("click", saveSubmission);
-  els.loadBtn.addEventListener("click", () => {
-    if (state.submissionId) {
-      openSubmission(state.submissionId);
+    if (!getDrawnLayers().length && state.submissionId) {
+      const remove = window.confirm(
+        "That was your last area. Remove your saved submission from the database?"
+      );
+      if (remove) {
+        await saveSubmission();
+      } else {
+        setStatus("Area removed. Save all to update your submission, or delete the last area to remove it.");
+      }
     } else {
-      setStatus("No saved submission in this browser yet. Draw polygons and save first.");
+      setStatus("Area removed from the map. Click Save all to update the database.");
     }
   });
+
+  els.saveAllBtn.addEventListener("click", () => saveSubmission());
+  els.newSubmissionBtn.addEventListener("click", () => startNewSubmission());
+  els.deleteSubmissionBtn.addEventListener("click", () => deleteSubmission());
   els.exportBtn.addEventListener("click", exportGeoJSON);
+
+  els.areaTypeFilter.addEventListener("change", () => {
+    state.areaFilter = els.areaTypeFilter.value;
+    refreshAreasList();
+  });
+
+  els.continueDialog.addEventListener("close", () => {
+    const choice = els.continueDialog.returnValue;
+    const data = state.pendingRestore;
+    state.pendingRestore = null;
+
+    if (!data) return;
+
+    if (choice === "continue") {
+      applySubmissionData(data);
+    } else {
+      clearSession();
+      clearMap();
+      setStatus("Started fresh. Draw areas on the map when ready.");
+    }
+  });
 
   state.supabase = initSupabase();
 
@@ -482,16 +765,19 @@
       return;
     }
 
-    await openSubmission(state.submissionId);
+    await openSubmission(state.submissionId, { promptContinue: true });
   }
+
+  populateTypeFilters();
 
   fetchConfig()
     .then(async (config) => {
       initMap(config);
+      refreshAreasList();
       if (!state.supabase) {
         setStatus("Map ready. Configure Supabase in docs/js/supabase-config.js to enable saving.");
       } else {
-        setStatus("Map ready. Draw polygons on the map to mark priority areas.");
+        setStatus("Map ready. Draw polygons to mark priority areas.");
       }
       await refreshSubmissions();
       await restoreSession();
