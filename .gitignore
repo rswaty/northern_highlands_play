@@ -9,6 +9,6 @@ __pycache__/
 
 data/submissions/*.geojson
 
-# Intermediate georeferenced overlay (tiles in docs/raster/tiles are committed)
+docs/raster/tiles/
 docs/raster/wfer_overlay.tif
-app/static/raster/wfer_overlay.png
+app/static/raster/

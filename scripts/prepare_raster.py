@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
-"""Prepare wfer.tif for web display: warp to Web Mercator, colorize, and tile."""
+"""Prepare wfer.tif for web display: warp to Web Mercator and colorize as PNG overlay."""
 
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.enums import ColorInterp, Resampling
+from rasterio.enums import Resampling
 from rasterio.warp import calculate_default_transform, reproject, transform_bounds
 from rasterio.transform import array_bounds
 
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_TIF = ROOT / "inputs" / "wfer.tif"
 OUTPUT_DIR = ROOT / "docs" / "raster"
-OUTPUT_GEOTIFF = OUTPUT_DIR / "wfer_overlay.tif"
-TILES_DIR = OUTPUT_DIR / "tiles"
+OUTPUT_PNG = OUTPUT_DIR / "wfer_overlay.png"
 OUTPUT_META = OUTPUT_DIR / "wfer_bounds.json"
 
-MIN_ZOOM = 8
-MAX_ZOOM = 14
-
-# Typical WFER nodata from ArcGIS export
 SRC_NODATA = 2147483647
 DST_NODATA = -9999.0
 
@@ -87,53 +80,6 @@ def colorize_wfer(values: np.ndarray, nodata_mask: np.ndarray) -> np.ndarray:
     return rgba
 
 
-def write_geotiff(rgba: np.ndarray, transform, crs: str, width: int, height: int) -> None:
-    with rasterio.open(
-        OUTPUT_GEOTIFF,
-        "w",
-        driver="GTiff",
-        width=width,
-        height=height,
-        count=4,
-        dtype=np.uint8,
-        crs=crs,
-        transform=transform,
-        compress="lzw",
-    ) as dst:
-        dst.colorinterp = (
-            ColorInterp.red,
-            ColorInterp.green,
-            ColorInterp.blue,
-            ColorInterp.alpha,
-        )
-        for band in range(4):
-            dst.write(rgba[:, :, band], band + 1)
-
-
-def build_tiles() -> None:
-    if TILES_DIR.exists():
-        shutil.rmtree(TILES_DIR)
-
-    TILES_DIR.mkdir(parents=True, exist_ok=True)
-
-    zoom_arg = f"{MIN_ZOOM}-{MAX_ZOOM}"
-    subprocess.run(
-        [
-            "gdal2tiles.py",
-            "--xyz",
-            "-z",
-            zoom_arg,
-            "--webviewer=none",
-            "--processes=4",
-            "--tilesize=256",
-            "-x",
-            str(OUTPUT_GEOTIFF),
-            str(TILES_DIR),
-        ],
-        check=True,
-    )
-
-
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -163,11 +109,9 @@ def main() -> None:
             dst_crs, "EPSG:4326", west, south, east, north
         )
 
-    write_geotiff(rgba, transform, dst_crs, width, height)
-    print(f"Wrote {OUTPUT_GEOTIFF}")
+    from PIL import Image
 
-    build_tiles()
-    print(f"Wrote tiles under {TILES_DIR}")
+    Image.fromarray(rgba, mode="RGBA").save(OUTPUT_PNG, optimize=True)
 
     meta = {
         "south": south,
@@ -175,11 +119,10 @@ def main() -> None:
         "north": north,
         "east": east,
         "crs": "EPSG:4326",
-        "minZoom": MIN_ZOOM,
-        "maxZoom": MAX_ZOOM,
-        "tileUrl": "raster/tiles/{z}/{x}/{y}.png",
+        "overlayUrl": "raster/wfer_overlay.png",
     }
     OUTPUT_META.write_text(json.dumps(meta, indent=2))
+    print(f"Wrote {OUTPUT_PNG}")
     print(f"Wrote {OUTPUT_META}")
 
 

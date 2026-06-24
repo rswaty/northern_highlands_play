@@ -436,9 +436,7 @@
     const bounds = await res.json();
     return {
       bounds,
-      tileUrl: bounds.tileUrl || "raster/tiles/{z}/{x}/{y}.png",
-      minZoom: bounds.minZoom ?? 8,
-      maxZoom: bounds.maxZoom ?? 14,
+      overlayUrl: bounds.overlayUrl || "raster/wfer_overlay.png",
     };
   }
 
@@ -696,7 +694,7 @@
   }
 
   function initMap(config) {
-    const { bounds, tileUrl, minZoom, maxZoom } = config;
+    const { bounds, overlayUrl } = config;
 
     state.map = L.map("map", { zoomControl: true });
     setBasemap(state.basemapKey);
@@ -705,14 +703,7 @@
     const northEast = L.latLng(bounds.north, bounds.east);
     const imageBounds = L.latLngBounds(southWest, northEast);
 
-    state.wferLayer = L.tileLayer(tileUrl, {
-      minZoom,
-      maxZoom,
-      maxNativeZoom: maxZoom,
-      bounds: imageBounds,
-      opacity: 0.85,
-      tms: false,
-    }).addTo(state.map);
+    state.wferLayer = L.imageOverlay(overlayUrl, imageBounds, { opacity: 0.85 }).addTo(state.map);
     state.map.fitBounds(imageBounds);
 
     state.drawnLayer = L.featureGroup().addTo(state.map);
